@@ -31,7 +31,8 @@ class LogStash::Inputs::EventLog < LogStash::Inputs::Base
 
   # How frequently should tail check for new event logs in ms (default: 1 second)
   config :interval, :validate => :number, :default => 1000
-
+  config :start_position, :validate => :string, :validate => [ "beginning","end" ], :default => "end"
+  start_position = "{@start_position}".downcase.strip
   public
   def register
 
@@ -40,7 +41,7 @@ class LogStash::Inputs::EventLog < LogStash::Inputs::Base
     @logger.info("Opening eventlog #{@logfile}")
 
     begin
-      @eventlog = Win32::EventLog.open(@logfile)
+      @eventlog = Win32::EventLog.open(@logfile)    
     rescue SystemCallError => e
       if e.errno == 1314 # ERROR_PRIVILEGE_NOT_HELD
         @logger.fatal("No privilege held to open logfile", :logfile => @logfile)
@@ -51,15 +52,23 @@ class LogStash::Inputs::EventLog < LogStash::Inputs::Base
 
   public
   def run(queue)
-
     @logger.debug("Tailing Windows Event Log '#{@logfile}'")
 
     old_total = @eventlog.total_records()
     flags     = Win32::EventLog::FORWARDS_READ | Win32::EventLog::SEEK_READ
-    rec_num   = @eventlog.read_last_event.record_number
+    rec_num   = @eventlog.read_last_event.record_number    
+    if start_position == "beginning"
+        old_total = 0
+    end    
 
     while !stop?
       new_total = @eventlog.total_records()
+      if old_total == 0
+        puts "reading from beginning of eventlog"        
+        @eventlog.read { |log| e = process(log); decorate(e); queue << e }
+        old_total = new_total
+        rec_num   = @eventlog.read_last_event.record_number + 1
+      end
       if new_total != old_total
         rec_num = @eventlog.oldest_record_number() if @eventlog.full?
         @eventlog.read(flags, rec_num).each { |log| e = process(log); decorate(e); queue << e }
